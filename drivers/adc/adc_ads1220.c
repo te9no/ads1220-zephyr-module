@@ -753,7 +753,11 @@ static int ads1220_perform_read(const struct device *dev,
 		k_sem_reset(&data->drdy_sem);
 	}
 
-	ret = ads1220_device_resume(dev);
+	if (!data->is_active) {
+		goto error;
+	}
+
+	ret = ads1220_command(dev, ADS1220_START_CMD);
 	if (ret != 0) {
 		goto error;
 	}
@@ -883,7 +887,7 @@ int ads1220_device_resume(const struct device *dev)
 	}
 	data->is_active = true;
 
-	LOG_INF("started");
+	LOG_INF("power-up");
 	return ret;
 }
 
@@ -902,7 +906,7 @@ int ads1220_device_suspend(const struct device *dev)
 	}
 	data->is_active = false;
 
-	LOG_INF("powerdown");
+	LOG_INF("power-down");
 	return ret;
 }
 
@@ -951,7 +955,6 @@ static int ads1220_init(const struct device *dev)
 	data->last_config3 = 0x00;
 	data->has_idac_ua = cfg->has_idac_ua;
 	data->idac_ua = cfg->idac_ua;
-	data->is_active = false;
 
 	ret = ads1220_configure_gpio(dev);
 	if (ret != 0) {
@@ -965,6 +968,7 @@ static int ads1220_init(const struct device *dev)
 
 	adc_context_unlock_unconditionally(&data->ctx);
 
+	data->is_active = true;
 	LOG_INF("Initialised (DRDY: %s)", data->has_drdy ? "yes" : "no");
 
 	return 0;

@@ -24,6 +24,7 @@
 LOG_MODULE_REGISTER(analog_axis_hires, CONFIG_INPUT_LOG_LEVEL);
 
 // Headers from this module
+#include <zephyr/dt-bindings/input/input_analog_axis_hires.h>
 #include <zephyr/input/input_analog_axis_hires.h>
 
 struct analog_axis_hires_channel_config {
@@ -413,7 +414,7 @@ static void analog_axis_hires_set_poll_level(const struct device *dev, uint8_t l
 	struct analog_axis_hires_data *data = dev->data;
 
 	data->poll_period_ms = cfg->has_poll_period_downshift_ms ?
-		cfg->poll_period_downshift_ms[lvl] : cfg->poll_period_ms;
+		cfg->poll_period_downshift_ms[lvl * 2] : cfg->poll_period_ms;
 	data->downshift_level = lvl;
 	k_timer_start(&data->timer,
 					K_MSEC(data->poll_period_ms), K_MSEC(data->poll_period_ms));
