@@ -52,7 +52,7 @@
         
         Pinout of 4-wire trackpoint sensor board:
         (bottom view, pins on bottom, left to right): [x] [y] [a] [b]
-        (NOTES: there are 2 version for T440. 4-wire & 5-wire.)
+        (NOTES: there are 2 version for T440. 4-wire & 6-wire.)
         +-----------------------------+
         |             (y)             |
         |             G1              |
