@@ -314,7 +314,7 @@ Setting last `downshift-period` rate to 0 stops the polling timer and drives `po
    - 5: REFP0
    - 6: REFN0
 
-7. **IDAC GPIO Controller**: The `ti,ads1220-idac` GPIO controller allows dynamic IDAC switching via standard GPIO API. Use `gpio_pin_set_dt()` to switch between `idac-ua-high` and `idac-ua-low` values. This is useful for:
+7. **IDAC GPIO Controller**: The `ti,ads1220-gpio` GPIO controller allows dynamic IDAC switching via standard GPIO API. Use `gpio_pin_set_dt()` to switch between `idac-ua-high` and `idac-ua-low` values. This is useful for:
    - Power saving: Enable IDAC only during measurement
    - Multi-range sensors: Switch excitation levels for different measurement ranges
    - Combined with `avdd-gpios`: Control both power supply and excitation current sequentially
@@ -335,7 +335,7 @@ Example device tree:
 
     /* IDAC GPIO - switch between 500uA (high) and 0uA (low) */
     gpio_ads1220_idac: gpio_ads1220_idac {
-        compatible = "ti,ads1220-idac";
+        compatible = "ti,ads1220-gpio";
         gpio-controller;
         #gpio-cells = <2>;
         dev-reg = <0>; /* refer to adc_ads1220 { reg = <0>; }; */
