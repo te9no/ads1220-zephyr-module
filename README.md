@@ -250,6 +250,7 @@ The GPIO controller exposes two pins:
 |----------|------|-------------|
 | `poll-period-ms` | int | Poll period in milliseconds |
 | `poll-period-downshift-ms` | array | Dynamic polling rate downshift: `[poll-period, downshift-time, downshift-period, ...]` (optional) |
+| `poll-period-en-gpios` | phandle-array | GPIO to enable analog power supply (active only when poll-period-downshift-ms is set, driven high while polling) |
 
 #### Poll Period Downshift
 
@@ -262,13 +263,17 @@ The `poll-period-downshift-ms` property enables dynamic polling rate reduction f
 - `downshift-time`: Idle time (ms) before switching to slower rate
 - `downshift-period`: New polling interval (ms) after idle time
 
-**Example**: `<8 5000 15 9000 100 11000 1300>`
+**Example**: `<8 5000 15 9000 100 11000 0>`
 - Polls at 8ms initially
 - After 5000ms idle → switches to 15ms
 - After 9000ms more idle → switches to 100ms
-- After 11000ms more idle → switches to 1300ms
+- After 11000ms more idle → switches to 0ms (powerdown mode)
 
-The driver continues polling even at the slowest rate to detect axis activity and upshift immediately. Setting `downshift-period` to 0 stops the polling timer, totally suspended.
+The driver continues polling to detect axis activity and upshift immediately to first level (8ms).
+
+Setting last `downshift-period` rate to 0 stops the polling timer and drives `poll-period-en-gpios` low, suspending the device. Or setting the poll at low rate, like 1500ms, to keep sensor rolling.
+
+> **Note**: Once suspended, an external application must wake it up by calling `sensor_attr_set(axh_dev, SENSOR_CHAN_ALL, ANALOG_AXIS_HIRES_ATTR_RESUME, &val);`. After woke up, it resumes to poll at lowest rate (100ms), resumes the downshift timer (11000ms), and detects axis activity to upshift.
 
 ### Axis Child Node
 | Property | Type | Description |
