@@ -665,7 +665,7 @@ static int analog_axis_hires_init(const struct device *dev)
 	if (cfg->has_gpio_poll_period_en) {
 		if (!cfg->has_poll_period_downshift_ms) {
 			LOG_ERR("poll-period-en-gpios requires poll-period-downshift-ms");
-			return;
+			return -1;
 		}
 
 		// LOG_INF("poll-period-en-gpios: has_gpio=%d port=%p pin=%u dt_flags=%u",
@@ -676,13 +676,13 @@ static int analog_axis_hires_init(const struct device *dev)
 
 		if (!device_is_ready(cfg->gpio_poll_period_en.port)) {
 			LOG_ERR("poll-period-en-gpios GPIO not ready");
-			return;
+			return -EIO;
 		}
 
 		int err = gpio_pin_configure_dt(&cfg->gpio_poll_period_en, GPIO_OUTPUT_INACTIVE);
 		if (err != 0) {
 			LOG_ERR("Setup poll-period-en-gpios GPIO failed (%d)", err);
-			return;
+			return err;
 		}
 	}
 
@@ -811,7 +811,7 @@ static int analog_axis_hires_pm_action(const struct device *dev,
 		};										\
 												\
 	static const uint32_t analog_axis_hires_downshift_##inst[] =			\
-		DT_INST_PROP_OR(inst, poll_period_downshift_ms, {0});				\
+		DT_INST_PROP_OR(inst, poll_period_downshift_ms, {});				\
 												\
 	static const struct analog_axis_hires_config analog_axis_hires_cfg_##inst = {			\
 		.poll_period_ms = DT_INST_PROP(inst, poll_period_ms),				\
