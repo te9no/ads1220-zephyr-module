@@ -72,12 +72,6 @@ struct analog_axis_hires_data {
 	uint8_t resume_level;
 	bool use_same_adc_ch_cfg;
 	bool axis_active;
-	bool has_active_direction;
-	uint16_t active_axis;
-	int8_t active_sign;
-	uint16_t candidate_axis;
-	int8_t candidate_sign;
-	uint8_t candidate_count;
 
 	K_KERNEL_STACK_MEMBER(thread_stack,
 			      CONFIG_INPUT_ANALOG_AXIS_HIRES_THREAD_STACK_SIZE);
@@ -192,33 +186,6 @@ static int32_t analog_axis_hires_out_linear(const struct device *dev,
 	return out + axis_cfg->out_min;
 }
 
-static void analog_axis_hires_cache_report(const struct analog_axis_hires_config *cfg,
-					   int32_t *report_cache,
-					   uint8_t *report_count,
-					   uint8_t channel,
-					   int32_t out)
-{
-	const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[channel];
-
-	for (uint8_t i = 0; i < *report_count; i++) {
-		uint8_t cached_ch = report_cache[i * 2];
-		const struct analog_axis_hires_channel_config *cached_cfg =
-			&cfg->channel_cfg[cached_ch];
-
-		if (cached_cfg->axis_type == axis_cfg->axis_type &&
-		    cached_cfg->axis == axis_cfg->axis) {
-			if (abs(out) > abs(report_cache[i * 2 + 1])) {
-				report_cache[i * 2 + 1] = out;
-			}
-			return;
-		}
-	}
-
-	report_cache[*report_count * 2] = channel;
-	report_cache[*report_count * 2 + 1] = out;
-	(*report_count)++;
-}
-
 static void analog_axis_hires_loop(const struct device *dev)
 {
 	const struct analog_axis_hires_config *cfg = dev->config;
@@ -290,9 +257,8 @@ static void analog_axis_hires_loop(const struct device *dev)
 
 	k_sem_take(&data->cal_lock, K_FOREVER);
 
-	int32_t axis_delta_cache[cfg->num_channels * 2];
-	int32_t raw_delta_cache[cfg->num_channels];
-	uint8_t axis_count = 0;
+	int32_t report_cache[cfg->num_channels * 2];
+	uint8_t report_count = 0;
 
 	for (i = 0; i < cfg->num_channels; i++) {
 		const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[i];
@@ -377,91 +343,37 @@ static void analog_axis_hires_loop(const struct device *dev)
 		// LOG_DBG("ch %d deadzone:%d min:%d max:%d calibrateed:%d",
 		// 	i, cal->in_deadzone, cal->in_min, cal->in_max, calib_state->calib_cnt);
 
-		int32_t in_mid = DIV_ROUND_CLOSEST(cal->in_min + cal->in_max, 2);
-		int32_t raw_delta = raw_val - in_mid;
-		bool aggregated = false;
-
-		raw_delta_cache[i] = raw_delta;
-
-		for (uint8_t j = 0; j < axis_count; j++) {
-			uint8_t cached_ch = axis_delta_cache[j * 2];
-			const struct analog_axis_hires_channel_config *cached_cfg =
-				&cfg->channel_cfg[cached_ch];
-
-			if (cached_cfg->axis_type == axis_cfg->axis_type &&
-			    cached_cfg->axis == axis_cfg->axis) {
-				axis_delta_cache[j * 2 + 1] += raw_delta;
-				aggregated = true;
-				break;
-			}
-		}
-
-		if (!aggregated) {
-			axis_delta_cache[axis_count * 2] = i;
-			axis_delta_cache[axis_count * 2 + 1] = raw_delta;
-			axis_count++;
-		}
-	}
-
-	if (cfg->num_channels == 4 &&
-	    cfg->channel_cfg[0].axis == INPUT_REL_X &&
-	    cfg->channel_cfg[1].axis == INPUT_REL_X &&
-	    cfg->channel_cfg[2].axis == INPUT_REL_Y &&
-	    cfg->channel_cfg[3].axis == INPUT_REL_Y) {
-		int32_t x_delta = (409 * raw_delta_cache[0] + 62 * raw_delta_cache[1] -
-				   555 * raw_delta_cache[2] - 48 * raw_delta_cache[3]) / 40;
-		int32_t y_delta = (375 * raw_delta_cache[0] - 247 * raw_delta_cache[1] -
-				   425 * raw_delta_cache[2] + 227 * raw_delta_cache[3]) / 40;
-
-		axis_delta_cache[0] = 0;
-		axis_delta_cache[1] = x_delta;
-		axis_delta_cache[2] = 2;
-		axis_delta_cache[3] = y_delta;
-		axis_count = 2;
-	}
-
-	int32_t report_cache[cfg->num_channels * 2];
-	uint8_t report_count = 0;
-
-	for (i = 0; i < axis_count; i++) {
-		uint8_t ch = axis_delta_cache[i * 2];
-		int32_t delta = axis_delta_cache[i * 2 + 1];
-		const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[ch];
-		struct analog_axis_hires_channel_data *axis_data = &cfg->channel_data[ch];
-		struct analog_axis_hires_calibration *cal = &cfg->calibration[ch];
-		int32_t deadzone = cal->in_deadzone;
-		int32_t abs_delta = abs(delta);
-
-		if (abs_delta <= deadzone) {
-			out = 0;
+		if (cal->in_deadzone > 0) {
+			out = analog_axis_hires_out_deadzone(dev, i, raw_val);
 		} else {
-			int32_t half_range = (cal->in_max - cal->in_min) / 2;
-			int32_t usable_range = MAX(half_range - deadzone, 1);
-			int32_t out_abs_max = MAX(abs(axis_cfg->out_min), abs(axis_cfg->out_max));
-			int32_t adjusted = abs_delta - deadzone;
-
-			out = (int32_t)(((int64_t)adjusted * out_abs_max) / usable_range);
-			if (delta < 0) {
-				out *= -1;
-			}
+			out = analog_axis_hires_out_linear(dev, i, raw_val);
 		}
 
-		if (out < axis_cfg->out_min) {
-			out = axis_cfg->out_min;
-		} else if (out > axis_cfg->out_max) {
-			out = axis_cfg->out_max;
-		}
+		out = CLAMP(out, axis_cfg->out_min, axis_cfg->out_max);
+		// LOG_DBG("%s: ch %d: out: %d clamp min: %d max: %d", dev->name, i, 
+		// 	out, axis_cfg->out_min, axis_cfg->out_max);
 
 		if (axis_cfg->invert_output) {
 			out = axis_cfg->out_max - out;
 		}
 
-		if (out != 0) {
-			report_cache[report_count * 2] = ch;
-			report_cache[report_count * 2 + 1] = out;
-			report_count++;
+		if (axis_cfg->skip_change_comparator) {
+			if (out != 0) {
+				report_cache[report_count * 2] = i;
+				report_cache[report_count * 2 + 1] = out;
+				report_count++;
+				LOG_DBG("%s: ch %d: out: %d raw: %d", dev->name, i, out, raw_val);
+			}
 		}
-
+		else {
+			// LOG_DBG("%s: ch %d: out: %d %d", dev->name, i, out, axis_data->last_out);
+			if (axis_data->last_out != out) {
+				report_cache[report_count * 2] = i;
+				report_cache[report_count * 2 + 1] = out;
+				report_count++;
+				LOG_DBG("%s: ch %d: out: %d (changed) raw: %d", dev->name, i, out, raw_val);
+			}
+		}
 		if (axis_data->last_out != out) {
 			data->axis_active = true;
 		}
@@ -469,67 +381,11 @@ static void analog_axis_hires_loop(const struct device *dev)
 	}
 
 	for (i = 0; i < report_count; i++) {
-		uint8_t dominant = 0;
-		int32_t dominant_abs = 0;
-
-		for (uint8_t j = 0; j < report_count; j++) {
-			int32_t val = abs(report_cache[j * 2 + 1]);
-
-			if (val > dominant_abs) {
-				dominant_abs = val;
-				dominant = j;
-			}
-		}
-
-		if (i != dominant) {
-			continue;
-		}
-
 		uint8_t ch = report_cache[i * 2];
 		int32_t val = report_cache[i * 2 + 1];
 		const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[ch];
-
-		int8_t sign = (val > 0) ? 1 : -1;
-		LOG_INF("%s: analog raw_delta ch0:%d ch1:%d ch2:%d ch3:%d axis_count:%d "
-			"axis0:%d/%d axis1:%d/%d selected:%s val:%d range:%d..%d "
-			"candidate:%d/%d active:%d/%d",
-			dev->name,
-			(cfg->num_channels > 0) ? raw_delta_cache[0] : 0,
-			(cfg->num_channels > 1) ? raw_delta_cache[1] : 0,
-			(cfg->num_channels > 2) ? raw_delta_cache[2] : 0,
-			(cfg->num_channels > 3) ? raw_delta_cache[3] : 0,
-			axis_count,
-			(axis_count > 0) ? cfg->channel_cfg[axis_delta_cache[0]].axis : 0,
-			(axis_count > 0) ? axis_delta_cache[1] : 0,
-			(axis_count > 1) ? cfg->channel_cfg[axis_delta_cache[2]].axis : 0,
-			(axis_count > 1) ? axis_delta_cache[3] : 0,
-			(axis_cfg->axis == INPUT_REL_X) ? "X" : "Y",
-			val, axis_cfg->out_min, axis_cfg->out_max,
-			data->candidate_axis, data->candidate_sign,
-			data->active_axis, data->active_sign);
-
-		if (!data->has_active_direction ||
-		    data->active_axis != axis_cfg->axis ||
-		    data->active_sign != sign) {
-			if (data->candidate_axis == axis_cfg->axis &&
-			    data->candidate_sign == sign) {
-				data->candidate_count++;
-			} else {
-				data->candidate_axis = axis_cfg->axis;
-				data->candidate_sign = sign;
-				data->candidate_count = 1;
-			}
-
-			if (data->candidate_count < 2) {
-				continue;
-			}
-
-			data->has_active_direction = true;
-			data->active_axis = axis_cfg->axis;
-			data->active_sign = sign;
-		}
-
-		input_report(dev, axis_cfg->axis_type, axis_cfg->axis, val, true, K_FOREVER);
+		bool sync = (i == report_count - 1);
+		input_report(dev, axis_cfg->axis_type, axis_cfg->axis, val, sync, K_FOREVER);
 	}
 
 	k_sem_give(&data->cal_lock);
@@ -575,14 +431,6 @@ void analog_axis_hires_resume(const struct device *dev)
 {
 	const struct analog_axis_hires_config *cfg = dev->config;
 	struct analog_axis_hires_data *data = dev->data;
-
-#ifdef CONFIG_PM_DEVICE
-	if (atomic_get(&data->suspended) == 1) {
-		analog_axis_hires_set_poll_level(dev, data->resume_level);
-		LOG_INF("Resume from suspend to level %d, poll per %d ms",
-			data->downshift_level, data->poll_period_ms);
-	} else
-#endif
 	if (data->downshift_level > data->resume_level) {
 		analog_axis_hires_set_poll_level(dev, data->resume_level);
 		LOG_INF("Resume to level %d, poll per %d ms",
@@ -802,12 +650,6 @@ static int analog_axis_hires_init(const struct device *dev)
 		cfg->poll_period_downshift_ms[0] : cfg->poll_period_ms;
 	data->downshift_level = 0;
 	data->axis_active = false;
-	data->has_active_direction = false;
-	data->active_axis = 0;
-	data->active_sign = 0;
-	data->candidate_axis = 0;
-	data->candidate_sign = 0;
-	data->candidate_count = 0;
 
 	if (cfg->has_poll_period_downshift_ms) {
 		for (int i = cfg->num_downshift_levels; i > 0; i--) {
@@ -873,18 +715,12 @@ static int analog_axis_hires_init(const struct device *dev)
 	atomic_set(&data->suspended, 1);
 
 	pm_device_init_suspended(dev);
-		ret = pm_device_runtime_enable(dev);
-		if (ret < 0) {
-			LOG_ERR("Failed to enable runtime power management");
-			return ret;
-		}
-
-		ret = pm_device_runtime_get(dev);
-		if (ret < 0) {
-			LOG_ERR("Failed to resume runtime power management");
-			return ret;
-		}
-	#endif
+	ret = pm_device_runtime_enable(dev);
+	if (ret < 0) {
+		LOG_ERR("Failed to enable runtime power management");
+		return ret;
+	}
+#endif
 
 	LOG_INF("Analog-axis-hires Initialised");
 
