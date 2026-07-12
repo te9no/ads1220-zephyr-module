@@ -484,6 +484,12 @@ static int ads1220_setup(const struct device *dev,
 	// LOG_DBG("setup: last active CONFIG0/1/2=0x%02X / 0x%02X / 0x%02X / 0x%02X", 
 	// 	config0, config1, config2, config3);
 
+	ret = ads1220_command(dev, ADS1220_POWERDOWN_CMD);
+	if (ret < 0) {
+		return ret;
+	}
+	k_usleep(100);
+
 	int gain_err = ads1220_gain_to_bit(channel_cfg->gain, &gain);
 	if (gain_err) {
 		LOG_WRN("Invalid given gain: %d. fallback to ADC_GAIN_1", gain);
@@ -717,17 +723,17 @@ static int ads1220_read_sample(const struct device *dev,
 				 uint32_t channels, uint32_t *buffer)
 {
 	int ret;
-	uint8_t tx_buf[3] = { ADS1220_RDATA_CMD, 0, 0 };
-	uint8_t rx_buf[3] = { 0 };
+	uint8_t tx_buf[4] = { ADS1220_RDATA_CMD, 0, 0, 0 };
+	uint8_t rx_buf[4] = { 0 };
 
 	ARG_UNUSED(channels);
 
-	ret = ads1220_transceive(dev, tx_buf, 3, rx_buf, 3);
+	ret = ads1220_transceive(dev, tx_buf, sizeof(tx_buf), rx_buf, sizeof(rx_buf));
 	if (ret != 0) {
 		return ret;
 	}
 
-	*buffer = (int32_t)sys_get_be24(rx_buf);
+	*buffer = (int32_t)sys_get_be24(&rx_buf[1]);
 	if (*buffer & 0x00800000) {
 		*buffer |= 0xFF000000;
 	}
