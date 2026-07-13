@@ -135,6 +135,12 @@ child-binding:
         Skip the change comparator and report all sampled values.
         By default, only reports values that differ from the previous reading.
 
+    monitor-only:
+      type: boolean
+      description: |
+        Sample and include this channel in diagnostics without generating input
+        events or including it in axis aggregation.
+
     in-calib-cycle:
       type: int
       description: |
