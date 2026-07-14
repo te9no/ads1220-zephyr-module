@@ -415,39 +415,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 		}
 	}
 
-	/* The two active LPPS bridge midpoints are diagonal components. */
-	if (axis_count == 2) {
-		uint8_t first_ch = axis_delta_cache[0];
-		uint8_t second_ch = axis_delta_cache[2];
-		const struct analog_axis_hires_channel_config *first_cfg =
-			&cfg->channel_cfg[first_ch];
-		const struct analog_axis_hires_channel_config *second_cfg =
-			&cfg->channel_cfg[second_ch];
-		int x_slot = -1;
-		int y_slot = -1;
-
-		if (first_cfg->axis_type == INPUT_EV_REL && first_cfg->axis == INPUT_REL_X) {
-			x_slot = 0;
-		} else if (first_cfg->axis_type == INPUT_EV_REL &&
-			   first_cfg->axis == INPUT_REL_Y) {
-			y_slot = 0;
-		}
-		if (second_cfg->axis_type == INPUT_EV_REL && second_cfg->axis == INPUT_REL_X) {
-			x_slot = 1;
-		} else if (second_cfg->axis_type == INPUT_EV_REL &&
-			   second_cfg->axis == INPUT_REL_Y) {
-			y_slot = 1;
-		}
-
-		if (x_slot >= 0 && y_slot >= 0) {
-			int32_t diagonal_x = axis_delta_cache[x_slot * 2 + 1];
-			int32_t diagonal_y = axis_delta_cache[y_slot * 2 + 1];
-
-			axis_delta_cache[x_slot * 2 + 1] = (diagonal_x - diagonal_y) / 2;
-			axis_delta_cache[y_slot * 2 + 1] = (diagonal_x + diagonal_y) / 2;
-		}
-	}
-
 	if (cfg->num_channels == 4 &&
 	    cfg->channel_cfg[0].axis == INPUT_REL_X &&
 	    cfg->channel_cfg[1].axis == INPUT_REL_X &&
