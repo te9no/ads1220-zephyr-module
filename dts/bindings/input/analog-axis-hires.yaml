@@ -56,6 +56,18 @@ properties:
       GPIO pin to enable the analog power supply.
       Pin is driven high while polling is active.
 
+  diagnostic-scan:
+    type: boolean
+    description: |
+      Log all configured raw ADC channels as compact ADSSCAN records without
+      requiring any channel to generate input events.
+
+  diagnostic-log-period-ms:
+    type: int
+    default: 500
+    description: |
+      Minimum interval between ADSSCAN record pairs in milliseconds.
+
 child-binding:
   properties:
     io-channels:

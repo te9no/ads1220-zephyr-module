@@ -55,7 +55,6 @@ static int gpio_ads1220_port_set_bits_raw(const struct device *dev,
 						gpio_port_pins_t mask)
 {
 	const struct gpio_ads1220_config *cfg = dev->config;
-	struct gpio_ads1220_data *data = dev->data;
 
 #if CONFIG_ADC_ADS1220
 	if (mask & BIT(ADS1220_GPIO_PIN_IDAC)) {
@@ -74,7 +73,6 @@ static int gpio_ads1220_port_clear_bits_raw(const struct device *dev,
 						  gpio_port_pins_t mask)
 {
 	const struct gpio_ads1220_config *cfg = dev->config;
-	struct gpio_ads1220_data *data = dev->data;
 
 #if CONFIG_ADC_ADS1220
 	if (mask & BIT(ADS1220_GPIO_PIN_IDAC)) {

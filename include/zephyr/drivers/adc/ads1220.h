@@ -12,8 +12,10 @@
 
 int ads1220_set_idac_ua_by_reg(uint16_t reg, uint16_t ua, bool write);
 
-int ads1220_device_resume();
+int ads1220_device_resume(const struct device *dev);
+int ads1220_device_resume_by_reg(uint16_t reg);
 
-int ads1220_device_suspend();
+int ads1220_device_suspend(const struct device *dev);
+int ads1220_device_suspend_by_reg(uint16_t reg);
 
 #endif /* ZEPHYR_INCLUDE_DRIVERS_ADC_ADS1220_H_ */

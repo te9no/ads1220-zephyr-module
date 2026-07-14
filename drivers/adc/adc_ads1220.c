@@ -44,8 +44,10 @@ LOG_MODULE_REGISTER(ads1220, CONFIG_ADC_LOG_LEVEL);
 
 #define ADS1220_MUX_MASK						GENMASK(7, 4)  /* CONFIG0: MUX selection bits */
 #define ADS1220_GAIN_MASK						GENMASK(3, 1)  /* CONFIG0: PGA gain selection bits */
+#define ADS1220_PGA_BYPASS_MASK			BIT(0)         /* CONFIG0: PGA bypass */
 #define ADS1220_DR_MASK							GENMASK(7, 5)  /* CONFIG1: Data rate selection bits */
-#define ADS1220_MODE_MASK						GENMASK(2, 2)  /* CONFIG1: Conversion mode: 0=continuous, 1=single-shot */
+#define ADS1220_CM_MASK							BIT(2)         /* CONFIG1: 0=single-shot, 1=continuous */
+#define ADS1220_VREF_MASK						GENMASK(7, 6)  /* CONFIG2: voltage reference */
 #define ADS1220_IDAC_CURRENT_MASK		GENMASK(2, 0)  /* CONFIG2: IDAC current selection bits */
 #define ADS1220_I1MUX_MASK					GENMASK(7, 5)  /* CONFIG3: IDAC1 mux selection bits */
 #define ADS1220_I2MUX_MASK					GENMASK(4, 2)  /* CONFIG3: IDAC2 mux selection bits */
@@ -62,7 +64,7 @@ LOG_MODULE_REGISTER(ads1220, CONFIG_ADC_LOG_LEVEL);
 #define ADS1220_IDAC_UA_250		4       /* 100: IDAC = 250 uA */
 #define ADS1220_IDAC_UA_500		5       /* 101: IDAC = 500 uA */
 #define ADS1220_IDAC_UA_1000	6       /* 110: IDAC = 1000 uA */
-#define ADS1220_IDAC_UA_2000	7       /* 111: IDAC = 2000 uA */
+#define ADS1220_IDAC_UA_1500	7       /* 111: IDAC = 1500 uA */
 
 #define ADS1220_RESET_DELAY	1      /* Reset delay in ms */
 
@@ -131,13 +133,14 @@ enum ads1220_idac_conn {
 	ADS1220_IDAC_AIN2 = 0x03,     	/* 011: IDAC1|2 connected to AIN2 */
 	ADS1220_IDAC_AIN3_REFP1 = 0x04, /* 100: IDAC1|2 connected to AIN3/REFN1 */
 	ADS1220_IDAC_REFP0 = 0x05,     	/* 101: IDAC1|2 connected to REFP0 */
-	ADS1220_IDAC_REFN0 = 0x06,     	/* 110: IDAC1|2 connected to REFP0 */
+	ADS1220_IDAC_REFN0 = 0x06,     	/* 110: IDAC1|2 connected to REFN0 */
 };
 
 struct ads1220_config {
 	const struct spi_dt_spec spi;
 	const struct gpio_dt_spec gpio_drdy;
 	bool low_side_power_switch;
+	bool pga_bypass;
 	bool has_idac_ua;
 	uint16_t idac_ua;
 };
@@ -182,7 +185,7 @@ static inline int ads1220_transceive(const struct device *dev,
 
 	struct spi_buf rx_buf = {
 		.buf = recv_buf,
-		.len = send_buf_len,
+		.len = recv_buf_len,
 	};
 	const struct spi_buf_set rx = {
 		.buffers = &rx_buf,
@@ -411,8 +414,8 @@ static inline int ads1220_idac_ua_to_bit(uint16_t idac_ua, uint8_t *val)
 	case 1000:
 		*val = ADS1220_IDAC_UA_1000;
 		break;
-	case 2000:
-		*val = ADS1220_IDAC_UA_2000;
+	case 1500:
+		*val = ADS1220_IDAC_UA_1500;
 		break;
 	default:
 		return -EINVAL;
@@ -453,6 +456,7 @@ int ads1220_set_idac_ua(const struct device *dev, uint16_t idac_ua, bool reg_wri
 			}
 			// LOG_DBG("wrotw config2");
 			data->last_config2 = config2;
+			k_usleep(200);
 		}
 
 	}
@@ -467,7 +471,7 @@ static int ads1220_setup(const struct device *dev,
 	uint8_t config1;
 	uint8_t config2;
 	uint8_t config3;
-	uint8_t gain;
+	uint8_t gain = ADS1220_GAIN_1;
 	uint8_t mux_value;
 	uint8_t data_rate = ADS1220_DR_1000;
 	uint16_t acq_time = channel_cfg->acquisition_time;
@@ -488,12 +492,6 @@ static int ads1220_setup(const struct device *dev,
 	// LOG_DBG("setup: last active CONFIG0/1/2=0x%02X / 0x%02X / 0x%02X / 0x%02X", 
 	// 	config0, config1, config2, config3);
 
-	ret = ads1220_command(dev, ADS1220_POWERDOWN_CMD);
-	if (ret < 0) {
-		return ret;
-	}
-	k_usleep(100);
-
 	int gain_err = ads1220_gain_to_bit(channel_cfg->gain, &gain);
 	if (gain_err) {
 		LOG_WRN("Invalid given gain: %d. fallback to ADC_GAIN_1", gain);
@@ -507,18 +505,30 @@ static int ads1220_setup(const struct device *dev,
 		LOG_WRN("Invalid given input-positive/negative: %d/%d.", pos_input, neg_input);
 		return mux_err;
 	}
+	if (neg_input == ADS1220_INPUT_AVSS && gain > ADS1220_GAIN_4) {
+		LOG_ERR("AINx-to-AVSS requires PGA bypass and gain 1, 2, or 4");
+		return -EINVAL;
+	}
 
-	config0 = (config0 & ~(ADS1220_MUX_MASK | ADS1220_GAIN_MASK)) |
+	bool pga_bypass = cfg->pga_bypass || neg_input == ADS1220_INPUT_AVSS;
+	if (pga_bypass && gain > ADS1220_GAIN_4) {
+		LOG_WRN("PGA bypass ignored for gain greater than 4");
+		pga_bypass = false;
+	}
+
+	config0 = (config0 & ~(ADS1220_MUX_MASK | ADS1220_GAIN_MASK |
+				 ADS1220_PGA_BYPASS_MASK)) |
 		   FIELD_PREP(ADS1220_MUX_MASK, mux_value) |
-		   FIELD_PREP(ADS1220_GAIN_MASK, gain);
+		   FIELD_PREP(ADS1220_GAIN_MASK, gain) |
+		   FIELD_PREP(ADS1220_PGA_BYPASS_MASK, pga_bypass);
 	// LOG_DBG("CONFIG0: MUX=0x%02X, GAIN=0x%02X",
 	// 	(unsigned int)(config0 & ADS1220_MUX_MASK),
 	// 	(unsigned int)(config0 & ADS1220_GAIN_MASK));
 
 	ads1220_data_rate_to_bit(acq_time, &data_rate, &ready_time_us);
 
-	config1 = (config1 & ~(ADS1220_DR_MASK | ADS1220_MODE_MASK)) |
-		  data_rate | FIELD_PREP(ADS1220_MODE_MASK, 1);
+	/* Use single-shot mode. START/SYNC initiates exactly one conversion. */
+	config1 = (config1 & ~(ADS1220_DR_MASK | ADS1220_CM_MASK)) | data_rate;
 	data->ready_time = K_USEC(ready_time_us + (ready_time_us / 10));
 
 	ads1220_vref_to_bit(channel_cfg->reference, &vref_value);
@@ -535,7 +545,8 @@ static int ads1220_setup(const struct device *dev,
 		idac_valid = !idac_ua_err;
 	}
 
-	config2 = (config2 & ~0x30) | (vref_value << 4);
+	config2 = (config2 & ~ADS1220_VREF_MASK) |
+		  FIELD_PREP(ADS1220_VREF_MASK, vref_value);
 	config2 = (config2 & ~0x08) | psw_value;
 	if (idac_valid) {
 		config2 = (config2 & ~ADS1220_IDAC_CURRENT_MASK) |
@@ -560,6 +571,10 @@ static int ads1220_setup(const struct device *dev,
 	// 	(unsigned int)(config3 & ADS1220_I2MUX_MASK));
 
 	uint8_t read_config0, read_config1, read_config2, read_config3;
+	bool idac_config_changed =
+		((config2 ^ data->last_config2) & ADS1220_IDAC_CURRENT_MASK) != 0U ||
+		((config3 ^ data->last_config3) &
+		 (ADS1220_I1MUX_MASK | ADS1220_I2MUX_MASK)) != 0U;
 
 	if (config0 != data->last_config0) {
 		ret = ads1220_reg_write(dev, ADS1220_CONFIG0_REG, config0);
@@ -621,6 +636,12 @@ static int ads1220_setup(const struct device *dev,
 		}
 	}
 
+	if (idac_config_changed && idac_valid && idac_current != ADS1220_IDAC_UA_0 &&
+	    (i1mux_value != ADS1220_IDAC_DISABLED ||
+	     i2mux_value != ADS1220_IDAC_DISABLED)) {
+		k_usleep(200);
+	}
+
 	if ((ads1220_config_history_valid & BIT(mux_value)) == 0U) {
 		for (uint8_t reg = ADS1220_CONFIG0_REG; reg <= ADS1220_CONFIG3_REG; reg++) {
 			ret = ads1220_reg_read(dev, reg, &ads1220_config_history[mux_value][reg], 1);
@@ -665,7 +686,8 @@ static int ads1220_validate_sequence(const struct adc_sequence *sequence)
 		return -EINVAL;
 	}
 
-	if (sequence->channels == 0 || (sequence->channels & ~0x0F) != 0) {
+	/* Channel IDs are virtual slots for the 15 selectable ADS1220 MUX modes. */
+	if (sequence->channels == 0 || (sequence->channels & ~GENMASK(14, 0)) != 0) {
 		LOG_ERR("invalid channel");
 		return -EINVAL;
 	}
@@ -905,6 +927,10 @@ int ads1220_device_resume(const struct device *dev)
 		LOG_WRN("fail to start ADS1220 device");
 		return ret;
 	}
+	if (data->has_idac_ua && data->idac_ua != 0U) {
+		/* Discard the wake-up conversion after POWERDOWN and let the IDAC settle. */
+		k_usleep(200);
+	}
 	data->is_active = true;
 
 	LOG_INF("power-up");
@@ -1002,6 +1028,7 @@ static int ads1220_init(const struct device *dev)
 		.spi = SPI_DT_SPEC_INST_GET(n, ADC_ADS1220_SPI_MODE, 0),	\
 		.gpio_drdy = GPIO_DT_SPEC_INST_GET_OR(n, drdy_gpios, {0}),	\
 		.low_side_power_switch = DT_INST_PROP(n, low_side_power_switch),	\
+		.pga_bypass = DT_INST_PROP(n, pga_bypass),			\
 		.has_idac_ua = DT_INST_NODE_HAS_PROP(n, idac_ua),		\
 		.idac_ua = DT_INST_PROP_OR(n, idac_ua, 0),			\
 	};									\

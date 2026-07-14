@@ -57,6 +57,8 @@ struct analog_axis_hires_config {
 	const bool has_poll_period_downshift_ms;
 	const struct gpio_dt_spec gpio_poll_period_en;
 	const bool has_gpio_poll_period_en;
+	const bool diagnostic_scan;
+	const uint32_t diagnostic_log_period_ms;
 	const struct analog_axis_hires_channel_config *channel_cfg;
 	struct analog_axis_hires_channel_data *channel_data;
 	struct analog_axis_hires_calibration *calibration;
@@ -521,7 +523,28 @@ static void analog_axis_hires_loop(const struct device *dev)
 	}
 
 	uint32_t now_ms = k_uptime_get_32();
-	if (axis_count > 0 && (uint32_t)(now_ms - data->last_diag_log_ms) >= 100U) {
+	if (cfg->diagnostic_scan &&
+	    (uint32_t)(now_ms - data->last_diag_log_ms) >= cfg->diagnostic_log_period_ms) {
+		data->last_diag_log_ms = now_ms;
+		LOG_INF("ADSSCAN0,%u,%d,%d,%d,%d,%d,%d,%d,%d", now_ms,
+			 cfg->num_channels > 0 ? bufs[0] : 0,
+			 cfg->num_channels > 1 ? bufs[1] : 0,
+			 cfg->num_channels > 2 ? bufs[2] : 0,
+			 cfg->num_channels > 3 ? bufs[3] : 0,
+			 cfg->num_channels > 4 ? bufs[4] : 0,
+			 cfg->num_channels > 5 ? bufs[5] : 0,
+			 cfg->num_channels > 6 ? bufs[6] : 0,
+			 cfg->num_channels > 7 ? bufs[7] : 0);
+		LOG_INF("ADSSCAN1,%u,%d,%d,%d,%d,%d,%d,%d", now_ms,
+			 cfg->num_channels > 8 ? bufs[8] : 0,
+			 cfg->num_channels > 9 ? bufs[9] : 0,
+			 cfg->num_channels > 10 ? bufs[10] : 0,
+			 cfg->num_channels > 11 ? bufs[11] : 0,
+			 cfg->num_channels > 12 ? bufs[12] : 0,
+			 cfg->num_channels > 13 ? bufs[13] : 0,
+			 cfg->num_channels > 14 ? bufs[14] : 0);
+	} else if (axis_count > 0 &&
+		   (uint32_t)(now_ms - data->last_diag_log_ms) >= 100U) {
 		int32_t raw_by_adc[4] = {0};
 		int32_t delta_by_adc[4] = {0};
 		int32_t out_by_adc[4] = {0};
@@ -997,6 +1020,8 @@ static int analog_axis_hires_pm_action(const struct device *dev,
 		.has_poll_period_downshift_ms = (ARRAY_SIZE(analog_axis_hires_downshift_##inst) > 0),	\
 		.gpio_poll_period_en = GPIO_DT_SPEC_INST_GET_OR(inst, poll_period_en_gpios, {0}),		\
 		.has_gpio_poll_period_en = DT_INST_PROP_HAS_IDX(inst, poll_period_en_gpios, 0),		\
+		.diagnostic_scan = DT_INST_PROP(inst, diagnostic_scan),				\
+		.diagnostic_log_period_ms = DT_INST_PROP(inst, diagnostic_log_period_ms),		\
 		.channel_cfg = analog_axis_hires_channel_cfg_##inst,					\
 		.channel_data = analog_axis_hires_channel_data_##inst,					\
 		.calibration = analog_axis_hires_calibration_##inst,					\
