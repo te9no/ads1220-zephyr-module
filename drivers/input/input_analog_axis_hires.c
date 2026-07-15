@@ -38,7 +38,6 @@ struct analog_axis_hires_channel_config {
 	bool invert_input;
 	bool invert_output;
 	bool skip_change_comparator;
-	bool monitor_only;
 	uint16_t calib_cycle;
 	uint8_t deadzone_calib_scale_pctg;
 };
@@ -57,8 +56,6 @@ struct analog_axis_hires_config {
 	const bool has_poll_period_downshift_ms;
 	const struct gpio_dt_spec gpio_poll_period_en;
 	const bool has_gpio_poll_period_en;
-	const bool diagnostic_scan;
-	const uint32_t diagnostic_log_period_ms;
 	const struct analog_axis_hires_channel_config *channel_cfg;
 	struct analog_axis_hires_channel_data *channel_data;
 	struct analog_axis_hires_calibration *calibration;
@@ -77,7 +74,6 @@ struct analog_axis_hires_data {
 	uint8_t resume_level;
 	bool use_same_adc_ch_cfg;
 	bool axis_active;
-	uint32_t last_diag_log_ms;
 
 	K_KERNEL_STACK_MEMBER(thread_stack,
 			      CONFIG_INPUT_ANALOG_AXIS_HIRES_THREAD_STACK_SIZE);
@@ -140,83 +136,6 @@ int analog_axis_hires_calibration_set(const struct device *dev,
 	k_sem_give(&data->cal_lock);
 
 	return 0;
-}
-
-static int32_t analog_axis_hires_out_deadzone(const struct device *dev,
-					int channel,
-					int32_t raw_val)
-{
-	const struct analog_axis_hires_config *cfg = dev->config;
-	const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[channel];
-	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
-
-	int32_t in_range = cal->in_max - cal->in_min;
-	int32_t out_range = axis_cfg->out_max - axis_cfg->out_min;
-	int32_t in_mid = DIV_ROUND_CLOSEST(cal->in_min + cal->in_max, 2);
-	int32_t in_min = cal->in_min;
-
-	if (abs(raw_val - in_mid) < cal->in_deadzone) {
-		return DIV_ROUND_CLOSEST(axis_cfg->out_max + axis_cfg->out_min, 2);
-	}
-
-	in_range -= cal->in_deadzone * 2;
-	in_min += cal->in_deadzone;
-	if (raw_val < in_mid) {
-		raw_val += cal->in_deadzone;
-	} else {
-		raw_val -= cal->in_deadzone;
-	}
-
-	int32_t val = raw_val - in_min;
-	float in = (double)val / (double)in_range;
-	int32_t out = in * out_range;
-	// LOG_DBG("%d / %d >> %d / %d", val, in_range, out, out_range);
-	return out + axis_cfg->out_min;
-}
-
-static int32_t analog_axis_hires_out_linear(const struct device *dev,
-				      int channel,
-				      int32_t raw_val)
-{
-	const struct analog_axis_hires_config *cfg = dev->config;
-	const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[channel];
-	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
-
-	int32_t in_range = cal->in_max - cal->in_min;
-	int32_t out_range = axis_cfg->out_max - axis_cfg->out_min;
-
-	int32_t val = raw_val - cal->in_min;
-	float in = (double)val / (double)in_range;
-	int32_t out = in * out_range;
-	// LOG_DBG("%d / %d >> %d / %d", val, in_range, out, out_range);
-	return out + axis_cfg->out_min;
-}
-
-static void analog_axis_hires_cache_report(const struct analog_axis_hires_config *cfg,
-					   int32_t *report_cache,
-					   uint8_t *report_count,
-					   uint8_t channel,
-					   int32_t out)
-{
-	const struct analog_axis_hires_channel_config *axis_cfg = &cfg->channel_cfg[channel];
-
-	for (uint8_t i = 0; i < *report_count; i++) {
-		uint8_t cached_ch = report_cache[i * 2];
-		const struct analog_axis_hires_channel_config *cached_cfg =
-			&cfg->channel_cfg[cached_ch];
-
-		if (cached_cfg->axis_type == axis_cfg->axis_type &&
-		    cached_cfg->axis == axis_cfg->axis) {
-			if (abs(out) > abs(report_cache[i * 2 + 1])) {
-				report_cache[i * 2 + 1] = out;
-			}
-			return;
-		}
-	}
-
-	report_cache[*report_count * 2] = channel;
-	report_cache[*report_count * 2 + 1] = out;
-	(*report_count)++;
 }
 
 static void analog_axis_hires_loop(const struct device *dev)
@@ -291,7 +210,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 	k_sem_take(&data->cal_lock, K_FOREVER);
 
 	int32_t axis_delta_cache[cfg->num_channels * 2];
-	int32_t raw_delta_cache[cfg->num_channels];
 	uint8_t axis_count = 0;
 
 	for (i = 0; i < cfg->num_channels; i++) {
@@ -381,7 +299,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 		int32_t raw_delta = raw_val - in_mid;
 		bool aggregated = false;
 
-		raw_delta_cache[i] = raw_delta;
 		if (!axis_data->filter_initialized) {
 			axis_data->filtered_delta = raw_delta;
 			axis_data->filter_initialized = true;
@@ -390,10 +307,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 				(raw_delta - axis_data->filtered_delta) / 8;
 		}
 		int32_t filtered_delta = axis_data->filtered_delta;
-
-		if (axis_cfg->monitor_only) {
-			continue;
-		}
 
 		for (uint8_t j = 0; j < axis_count; j++) {
 			uint8_t cached_ch = axis_delta_cache[j * 2];
@@ -413,23 +326,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 			axis_delta_cache[axis_count * 2 + 1] = filtered_delta;
 			axis_count++;
 		}
-	}
-
-	if (cfg->num_channels == 4 &&
-	    cfg->channel_cfg[0].axis == INPUT_REL_X &&
-	    cfg->channel_cfg[1].axis == INPUT_REL_X &&
-	    cfg->channel_cfg[2].axis == INPUT_REL_Y &&
-	    cfg->channel_cfg[3].axis == INPUT_REL_Y) {
-		int32_t x_delta = (409 * raw_delta_cache[0] + 62 * raw_delta_cache[1] -
-				   555 * raw_delta_cache[2] - 48 * raw_delta_cache[3]) / 40;
-		int32_t y_delta = (375 * raw_delta_cache[0] - 247 * raw_delta_cache[1] -
-				   425 * raw_delta_cache[2] + 227 * raw_delta_cache[3]) / 40;
-
-		axis_delta_cache[0] = 0;
-		axis_delta_cache[1] = x_delta;
-		axis_delta_cache[2] = 2;
-		axis_delta_cache[3] = y_delta;
-		axis_count = 2;
 	}
 
 	int32_t report_cache[cfg->num_channels * 2];
@@ -465,16 +361,17 @@ static void analog_axis_hires_loop(const struct device *dev)
 		}
 
 		if (axis_cfg->invert_output) {
-			out = axis_cfg->out_max - out;
+			out = axis_cfg->out_min + axis_cfg->out_max - out;
 		}
 
-		if (out != 0) {
+		bool changed = axis_data->last_out != out;
+		if (out != 0 && (axis_cfg->skip_change_comparator || changed)) {
 			report_cache[report_count * 2] = ch;
 			report_cache[report_count * 2 + 1] = out;
 			report_count++;
 		}
 
-		if (axis_data->last_out != out) {
+		if (changed) {
 			data->axis_active = true;
 		}
 		axis_data->last_out = out;
@@ -487,56 +384,6 @@ static void analog_axis_hires_loop(const struct device *dev)
 		bool sync = (i == report_count - 1);
 
 		input_report(dev, axis_cfg->axis_type, axis_cfg->axis, val, sync, K_FOREVER);
-	}
-
-	uint32_t now_ms = k_uptime_get_32();
-	if (cfg->diagnostic_scan &&
-	    (uint32_t)(now_ms - data->last_diag_log_ms) >= cfg->diagnostic_log_period_ms) {
-		data->last_diag_log_ms = now_ms;
-		LOG_INF("ADSSCAN0,%u,%d,%d,%d,%d,%d,%d,%d,%d", now_ms,
-			 cfg->num_channels > 0 ? bufs[0] : 0,
-			 cfg->num_channels > 1 ? bufs[1] : 0,
-			 cfg->num_channels > 2 ? bufs[2] : 0,
-			 cfg->num_channels > 3 ? bufs[3] : 0,
-			 cfg->num_channels > 4 ? bufs[4] : 0,
-			 cfg->num_channels > 5 ? bufs[5] : 0,
-			 cfg->num_channels > 6 ? bufs[6] : 0,
-			 cfg->num_channels > 7 ? bufs[7] : 0);
-		LOG_INF("ADSSCAN1,%u,%d,%d,%d,%d,%d,%d,%d", now_ms,
-			 cfg->num_channels > 8 ? bufs[8] : 0,
-			 cfg->num_channels > 9 ? bufs[9] : 0,
-			 cfg->num_channels > 10 ? bufs[10] : 0,
-			 cfg->num_channels > 11 ? bufs[11] : 0,
-			 cfg->num_channels > 12 ? bufs[12] : 0,
-			 cfg->num_channels > 13 ? bufs[13] : 0,
-			 cfg->num_channels > 14 ? bufs[14] : 0);
-	} else if (axis_count > 0 &&
-		   (uint32_t)(now_ms - data->last_diag_log_ms) >= 100U) {
-		int32_t raw_by_adc[4] = {0};
-		int32_t delta_by_adc[4] = {0};
-		int32_t out_by_adc[4] = {0};
-
-		for (i = 0; i < cfg->num_channels; i++) {
-			uint8_t adc_ch = cfg->channel_cfg[i].adc.channel_id;
-
-			if (adc_ch < ARRAY_SIZE(raw_by_adc)) {
-				raw_by_adc[adc_ch] = bufs[i];
-				delta_by_adc[adc_ch] = raw_delta_cache[i];
-				out_by_adc[adc_ch] = cfg->channel_data[i].last_out;
-			}
-		}
-
-		data->last_diag_log_ms = now_ms;
-		if (cfg->num_channels >= 4) {
-			LOG_INF("ADSCSV4,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-				now_ms, raw_by_adc[0], raw_by_adc[1], raw_by_adc[2], raw_by_adc[3],
-				delta_by_adc[0], delta_by_adc[1], delta_by_adc[2], delta_by_adc[3],
-				out_by_adc[0], out_by_adc[1], out_by_adc[2], out_by_adc[3]);
-		} else {
-			LOG_INF("ADSCSV,%u,%d,%d,%d,%d,%d,%d", now_ms,
-				raw_by_adc[0], raw_by_adc[1], delta_by_adc[0], delta_by_adc[1],
-				out_by_adc[0], out_by_adc[1]);
-		}
 	}
 
 	k_sem_give(&data->cal_lock);
@@ -950,7 +797,6 @@ static int analog_axis_hires_pm_action(const struct device *dev,
 		.invert_input = DT_PROP(node_id, invert_input), \
 		.invert_output = DT_PROP(node_id, invert_output), \
 		.skip_change_comparator = DT_PROP(node_id, skip_change_comparator), \
-		.monitor_only = DT_PROP(node_id, monitor_only), \
 		.calib_cycle = DT_PROP_OR(node_id, in_calib_cycle, 0), \
 		.deadzone_calib_scale_pctg = DT_PROP_OR(node_id, in_deadzone_calib_scale_pctg, 0), \
 	}
@@ -987,8 +833,6 @@ static int analog_axis_hires_pm_action(const struct device *dev,
 		.has_poll_period_downshift_ms = (ARRAY_SIZE(analog_axis_hires_downshift_##inst) > 0),	\
 		.gpio_poll_period_en = GPIO_DT_SPEC_INST_GET_OR(inst, poll_period_en_gpios, {0}),		\
 		.has_gpio_poll_period_en = DT_INST_PROP_HAS_IDX(inst, poll_period_en_gpios, 0),		\
-		.diagnostic_scan = DT_INST_PROP(inst, diagnostic_scan),				\
-		.diagnostic_log_period_ms = DT_INST_PROP(inst, diagnostic_log_period_ms),		\
 		.channel_cfg = analog_axis_hires_channel_cfg_##inst,					\
 		.channel_data = analog_axis_hires_channel_data_##inst,					\
 		.calibration = analog_axis_hires_calibration_##inst,					\
