@@ -26,14 +26,22 @@ properties:
       between AIN3/REFN1 and AVSS is turned on during conversion to reduce
       input leakage current. This is useful for RTD applications.
 
+  pga-bypass:
+    type: boolean
+    description: |
+      Bypass the internal low-noise PGA for gains 1, 2, and 4. Enable this
+      when the input common-mode voltage is close to AVSS or AVDD. The driver
+      always enables bypass for AINx-to-AVSS measurements, where it is required
+      by the ADS1220 data sheet.
+
   idac-ua:
     type: int
     required: false
     description: |
       IDAC current setting in microamperes. Configures the excitation current
       sources IDAC1 and IDAC2. Default is 0 (disabled).
-      Valid values: 0, 10, 50, 100, 250, 500, 1000, 2000 (in microamperes).
-    enum: [0, 10, 50, 100, 250, 500, 1000, 2000]
+      Valid values: 0, 10, 50, 100, 250, 500, 1000, 1500 (in microamperes).
+    enum: [0, 10, 50, 100, 250, 500, 1000, 1500]
 
 io-channel-cells:
   - input
