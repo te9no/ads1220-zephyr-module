@@ -102,7 +102,9 @@ static int gpio_ads1220_init(const struct device *dev)
 
 #define GPIO_ADS1220_INST_DEFINE(n) \
 	static const struct gpio_ads1220_config gpio_ads1220_config_##n = { \
-		.common = GPIO_DT_INST_PORT_PIN_MASK_NGPIOS_EXC(n, 32), \
+		.common = { \
+			.port_pin_mask = GPIO_DT_INST_PORT_PIN_MASK_NGPIOS_EXC(n, 32), \
+		}, \
 		.dev_reg = DT_INST_PROP_OR(n, dev_reg, 0), \
 		.idac_ua_high = DT_INST_PROP_OR(n, idac_ua_high, 0), \
 		.idac_ua_low = DT_INST_PROP_OR(n, idac_ua_low, 0), \
