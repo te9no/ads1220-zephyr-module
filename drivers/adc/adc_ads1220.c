@@ -17,6 +17,11 @@
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/sys/util_macro.h>
+#if __has_include(<zephyr/version.h>)
+#include <zephyr/version.h>
+#else
+#include <version.h>
+#endif
 #include <string.h>
 
 // Headers from zephyr/drivers/adc/adc_context.h
@@ -971,7 +976,11 @@ static int ads1220_pm_action(const struct device *dev,
 }
 #endif /* CONFIG_PM_DEVICE */
 
+#if ZEPHYR_VERSION_CODE >= ZEPHYR_VERSION(4, 0, 0)
 static DEVICE_API(adc, ads1220_api) = {
+#else
+static const struct adc_driver_api ads1220_api = {
+#endif
 	.channel_setup = ads1220_channel_setup,
 	.read = ads1220_read,
 	.ref_internal = ADS1220_REF_INTERNAL,
