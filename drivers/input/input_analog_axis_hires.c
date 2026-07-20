@@ -97,11 +97,10 @@ int analog_axis_hires_calibration_get(const struct device *dev,
 {
 	const struct analog_axis_hires_config *cfg = dev->config;
 	struct analog_axis_hires_data *data = dev->data;
-	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
-
-	if (channel >= cfg->num_channels) {
+	if (channel < 0 || channel >= cfg->num_channels || out_cal == NULL) {
 		return -EINVAL;
 	}
+	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
 
 	k_sem_take(&data->cal_lock, K_FOREVER);
 	memcpy(out_cal, cal, sizeof(struct analog_axis_hires_calibration));
@@ -125,11 +124,10 @@ int analog_axis_hires_calibration_set(const struct device *dev,
 {
 	const struct analog_axis_hires_config *cfg = dev->config;
 	struct analog_axis_hires_data *data = dev->data;
-	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
-
-	if (channel >= cfg->num_channels) {
+	if (channel < 0 || channel >= cfg->num_channels || new_cal == NULL) {
 		return -EINVAL;
 	}
+	struct analog_axis_hires_calibration *cal = &cfg->calibration[channel];
 
 	k_sem_take(&data->cal_lock, K_FOREVER);
 	memcpy(cal, new_cal, sizeof(struct analog_axis_hires_calibration));
@@ -371,7 +369,7 @@ static void analog_axis_hires_loop(const struct device *dev)
 			report_count++;
 		}
 
-		if (changed) {
+		if (out != 0 || changed) {
 			data->axis_active = true;
 		}
 		axis_data->last_out = out;
